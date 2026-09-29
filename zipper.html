@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Canonical Huffman File Zipper</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #f4f4f9; max-width: 600px; margin: auto; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        button { background: #28a745; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; width: 100%; margin-top: 10px; font-size: 16px; }
+        button:hover { background: #218838; }
+        input[type="file"] { width: 100%; margin: 10px 0; }
+        pre { background: #eee; padding: 10px; border-radius: 4px; overflow-x: auto; white-space: pre-wrap; font-size: 12px; }
+    </style>
+</head>
+<body>
+
+    <h2>Canonical Huffman File Zipper (Bonus)</h2>
+
+    <div class="card">
+        <h3>Compress File</h3>
+        <input type="file" id="compressInput">
+        <button onclick="compressFile()">Compress & Download (.huf)</button>
+    </div>
+
+    <div class="card">
+        <h3>Decompress File</h3>
+        <input type="file" id="decompressInput">
+        <button onclick="decompressFile()">Decompress & Download</button>
+    </div>
+
+    <div class="card">
+        <h3>Console Output / Stats</h3>
+        <pre id="output">Select a file to begin...</pre>
+    </div>
+
+    <script>
+
+        class Node {
+            constructor(byte, freq, left = null, right = null) {
+                this.byte = byte;
+                this.freq = freq;
+                this.left = left;
+                this.right = right;
+            }
+        }
+
+        class MinHeap {
+            constructor() { this.heap = []; }
+            size() { return this.heap.length; }
+            push(node) {
+                this.heap.push(node);
+                this._bubbleUp(this.heap.length - 1);
+            }
+            pop() {
+                if (this.size() === 0) return null;
+                const top = this.heap[0];
+                const bottom = this.heap.pop();
+                if (this.size() > 0) {
+                    this.heap[0] = bottom;
+                    this._sinkDown(0);
+                }
+                return top;
+            }
+            _bubbleUp(idx) {
+                while (idx > 0) {
+                    let parentIdx = Math.floor((idx - 1) / 2);
+                    if (this.heap[idx].freq >= this.heap[parentIdx].freq) break;
+                    [this.heap[idx], this.heap[parentIdx]] = [this.heap[parentIdx], this.heap[idx]];
+                    idx = parentIdx;
+                }
+            }
+            _sinkDown(idx) {
+                const len = this.heap.length;
+                while (true) {
+                    let left = 2 * idx + 1, right = 2 * idx + 2, smallest = idx;
+                    if (left < len && this.heap[left].freq < this.heap[smallest].freq) smallest = left;
+                    if (right < len && this.heap[right].freq < this.heap[smallest].freq) smallest = right;
+                    if (smallest === idx) break;
+                    [this.heap[idx], this.heap[smallest]] = [this.heap[smallest], this.heap[idx]];
+                    idx = smallest;
+                }
+            }
+        }
+
+
+        function generateCanonicalCodes(bitLengths) {
+            const sorted = Array.from(bitLengths.entries()).sort((a, b) => {
+                if (a[1] === b[1]) return a[0] - b[0];
+                return a[1] - b[1];
+            });
+
+            const codeMap = new Map();
+            let currentCode = 0;
+            let currentLength = 0;
+
+            for (const [byte, length] of sorted) {
+                if (currentLength === 0) {
+                    currentLength = length;
+                } else {
+                    currentCode = (currentCode + 1) << (length - currentLength);
+                    currentLength = length;
+                }
+                codeMap.set(byte, currentCode.toString(2).padStart(length, '0'));
+            }
+
+            return codeMap;
+        }
+
+        async function compressFile() {
+            const input = document.getElementById('compressInput');
+            if (!input.files.length) return alert('Select a file first!');
+
+            const file = input.files[0];
+            const arrayBuffer = await file.arrayBuffer();
+            const bytes = new Uint8Array(arrayBuffer);
+            const startTime = performance.now();
+
+            if (bytes.length === 0) return alert('Cannot compress empty files!');
+
+            const freqMap = new Map();
+            for (let b of bytes) freqMap.set(b, (freqMap.get(b) || 0) + 1);
+
+            const minHeap = new MinHeap();
+            freqMap.forEach((freq, byte) => minHeap.push(new Node(byte, freq)));
+
+            if (minHeap.size() === 1) {
+                const singleNode = minHeap.pop();
+                minHeap.push(new Node(null, singleNode.freq, singleNode, null));
+            }
+
+            while (minHeap.size() > 1) {
+                const left = minHeap.pop();
+                const right = minHeap.pop();
+                minHeap.push(new Node(null, left.freq + right.freq, left, right));
+            }
+            const root = minHeap.pop();
+
+            const bitLengths = new Map();
+            function extractLengths(node, depth = 0) {
+                if (!node) return;
+                if (node.byte !== null) {
+                    bitLengths.set(node.byte, depth === 0 ? 1 : depth);
+                    return;
+                }
+                extractLengths(node.left, depth + 1);
+                extractLengths(node.right, depth + 1);
+            }
+            extractLengths(root);
+
+            const canonicalCodes = generateCanonicalCodes(bitLengths);
+
+            const headerObj = {
+                origSize: bytes.length,
+                origName: file.name,
+                lengths: Array.from(bitLengths.entries())
+            };
+            const headerStr = JSON.stringify(headerObj) + "\n---HEADER_END---\n";
+            const headerBytes = new TextEncoder().encode(headerStr);
+
+            let bitString = "";
+            for (let b of bytes) bitString += canonicalCodes.get(b);
+
+            const padding = (8 - (bitString.length % 8)) % 8;
+            bitString += "0".repeat(padding);
+
+            const compressedData = new Uint8Array(bitString.length / 8);
+            for (let i = 0; i < bitString.length; i += 8) {
+                compressedData[i / 8] = parseInt(bitString.substr(i, 8), 2);
+            }
+
+            const finalBlob = new Blob([headerBytes, compressedData], { type: 'application/octet-stream' });
+            const endTime = performance.now();
+
+            const compRatio = ((1 - (finalBlob.size / bytes.length)) * 100).toFixed(2);
+            document.getElementById('output').textContent = 
+                `Canonical Compression Complete!\n` +
+                `Original Size: ${bytes.length} bytes\n` +
+                `Compressed Size: ${finalBlob.size} bytes\n` +
+                `Space Saved: ${compRatio}%\n` +
+                `Time Spent: ${(endTime - startTime).toFixed(2)} ms`;
+
+            downloadBlob(finalBlob, file.name + ".huf");
+        }
+
+        async function decompressFile() {
+            const input = document.getElementById('decompressInput');
+            if (!input.files.length) return alert('Select a file to decompress!');
+
+            const file = input.files[0];
+            const arrayBuffer = await file.arrayBuffer();
+            const bytes = new Uint8Array(arrayBuffer);
+
+            const textDecoder = new TextDecoder();
+            const text = textDecoder.decode(bytes);
+            const headerEndIndex = text.indexOf("\n---HEADER_END---\n");
+
+            if (headerEndIndex === -1) return alert("Invalid or corrupted file format.");
+
+            const headerStr = text.substring(0, headerEndIndex);
+            const headerObj = JSON.parse(headerStr);
+            const headerOffset = new TextEncoder().encode(headerStr + "\n---HEADER_END---\n").length;
+
+            const bitLengths = new Map(headerObj.lengths);
+            const canonicalCodes = generateCanonicalCodes(bitLengths);
+
+            const reverseMap = new Map();
+            canonicalCodes.forEach((code, byte) => reverseMap.set(code, byte));
+
+            const payloadBytes = bytes.subarray(headerOffset);
+            let bitString = "";
+            for (let b of payloadBytes) {
+                bitString += b.toString(2).padStart(8, '0');
+            }
+
+            const outputBytes = new Uint8Array(headerObj.origSize);
+            let currentBitBuffer = "";
+            let outIdx = 0;
+
+            for (let i = 0; i < bitString.length; i++) {
+                currentBitBuffer += bitString[i];
+                if (reverseMap.has(currentBitBuffer)) {
+                    outputBytes[outIdx++] = reverseMap.get(currentBitBuffer);
+                    currentBitBuffer = "";
+                    if (outIdx === headerObj.origSize) break; // Ignore trailing zero padding
+                }
+            }
+
+            document.getElementById('output').textContent = `Decompression Complete!\nFile restored: ${headerObj.origName}`;
+            downloadBlob(new Blob([outputBytes]), "decompressed_" + headerObj.origName);
+        }
+
+        function downloadBlob(blob, filename) {
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = filename;
+            a.click();
+        }
+    </script>
+</body>
+</html>

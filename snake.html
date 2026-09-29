@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Structures: Snake Game (Bonus Features)</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; background: #1e1e1e; color: #fff; margin: 0; padding: 10px; }
+        .container { max-width: 450px; margin: 0 auto; }
+        canvas { background: #111; border: 2px solid #555; display: block; margin: 10px auto; max-width: 100%; }
+        .dashboard { display: flex; justify-content: space-between; font-weight: bold; margin-bottom: 5px; background: #2a2a2a; padding: 8px 12px; border-radius: 6px; }
+        .controls-panel { display: flex; justify-content: space-around; margin: 10px 0; }
+        button.action-btn { background: #007bff; color: white; border: none; padding: 8px 14px; font-size: 14px; border-radius: 4px; cursor: pointer; }
+        button.action-btn:hover { background: #0056b3; }
+        button.active { background: #28a745; }
+        .controls { display: grid; grid-template-columns: repeat(3, 60px); gap: 10px; justify-content: center; margin-top: 10px; }
+        .btn { width: 60px; height: 60px; background: #444; color: white; border: none; font-size: 20px; border-radius: 8px; }
+        .btn:active { background: #666; }
+        .leaderboard { background: #2a2a2a; padding: 10px; border-radius: 6px; margin-top: 15px; text-align: left; }
+        .leaderboard ol { padding-left: 20px; margin: 5px 0 0 0; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h2>Snake Game (Bonus Mode)</h2>
+        
+        <div class="dashboard">
+            <div>Score: <span id="score">0</span></div>
+            <div>Level: <span id="level">1</span></div>
+            <div>High: <span id="highScore">0</span></div>
+        </div>
+
+        <canvas id="gameCanvas" width="400" height="400"></canvas>
+
+        <div class="controls-panel">
+            <button class="action-btn" onclick="togglePause()" id="pauseBtn">Pause</button>
+            <button class="action-btn" onclick="toggleAI()" id="aiBtn">AI Auto-Play (BFS): OFF</button>
+        </div>
+
+        <div class="controls">
+            <div></div>
+            <button class="btn" onclick="enqueueInput('UP')">▲</button>
+            <div></div>
+            <button class="btn" onclick="enqueueInput('LEFT')">◄</button>
+            <button class="btn" onclick="enqueueInput('DOWN')">▼</button>
+            <button class="btn" onclick="enqueueInput('RIGHT')">►</button>
+        </div>
+
+        <div class="leaderboard">
+            <strong>🏆 Top 5 Saved Leaderboard</strong>
+            <ol id="leaderboardList"></ol>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const gridSize = 20;
+        const tileCount = canvas.width / gridSize;
+
+
+        class Deque {
+            constructor() { this.items = []; }
+            addFront(element) { this.items.unshift(element); }
+            removeBack() { return this.items.pop(); }
+            peekFront() { return this.items[0]; }
+            toArray() { return this.items; }
+        }
+
+        class Queue {
+            constructor() { this.items = []; }
+            enqueue(element) { this.items.push(element); }
+            dequeue() { return this.items.shift(); }
+            isEmpty() { return this.items.length === 0; }
+        }
+
+
+        let snake = new Deque();
+        let bodySet = new Set();
+        let obstacleSet = new Set();
+        let inputQueue = new Queue();
+        
+        let direction = 'RIGHT';
+        let food = { x: 5, y: 5 };
+        let score = 0;
+        let level = 1;
+        let gameLoop = null;
+        let isPaused = false;
+        let aiMode = false;
+        let speed = 120;
+
+
+        function initGame() {
+            snake = new Deque();
+            snake.addFront({ x: 5, y: 10 });
+            snake.addFront({ x: 6, y: 10 });
+            snake.addFront({ x: 7, y: 10 });
+
+            bodySet = new Set(['5,10', '6,10', '7,10']);
+            direction = 'RIGHT';
+            score = 0;
+            level = 1;
+            speed = 120;
+
+            document.getElementById('score').textContent = score;
+            document.getElementById('level').textContent = level;
+
+            generateObstacles();
+            spawnFood();
+            updateLeaderboardUI();
+
+            if (gameLoop) clearInterval(gameLoop);
+            gameLoop = setInterval(update, speed);
+        }
+
+        function generateObstacles() {
+            obstacleSet.clear();
+            
+            if (level >= 2) {
+                let mid = Math.floor(tileCount / 2);
+                for (let i = -2; i <= 2; i++) {
+                    if (i !== 0) {
+                        obstacleSet.add(`${mid + i},${mid}`);
+                        obstacleSet.add(`${mid},${mid + i}`);
+                    }
+                }
+            }
+            if (level >= 3) {
+                for (let i = 2; i <= 5; i++) {
+                    obstacleSet.add(`${i},5`);
+                    obstacleSet.add(`${tileCount - 1 - i},15`);
+                }
+            }
+        }
+
+        function checkLevelUp() {
+            let newLevel = Math.floor(score / 50) + 1;
+            if (newLevel !== level) {
+                level = newLevel;
+                document.getElementById('level').textContent = level;
+                
+                speed = Math.max(50, 120 - (level - 1) * 15);
+                clearInterval(gameLoop);
+                gameLoop = setInterval(update, speed);
+
+                generateObstacles();
+            }
+        }
+
+        function spawnFood() {
+            while (true) {
+                let fx = Math.floor(Math.random() * tileCount);
+                let fy = Math.floor(Math.random() * tileCount);
+                let key = `${fx},${fy}`;
+
+                if (!bodySet.has(key) && !obstacleSet.has(key)) {
+                    food = { x: fx, y: fy };
+                    break;
+                }
+            }
+        }
+
+
+        function findShortestPathBFS(start, target) {
+            const queue = new Queue();
+            const visited = new Set();
+            const parentMap = new Map();
+
+            queue.enqueue(start);
+            visited.add(`${start.x},${start.y}`);
+
+            const directions = [
+                { x: 0, y: -1, dir: 'UP' },
+                { x: 0, y: 1, dir: 'DOWN' },
+                { x: -1, y: 0, dir: 'LEFT' },
+                { x: 1, y: 0, dir: 'RIGHT' }
+            ];
+
+            while (!queue.isEmpty()) {
+                const current = queue.dequeue();
+
+                if (current.x === target.x && current.y === target.y) {
+                    // Reconstruct path
+                    let currKey = `${target.x},${target.y}`;
+                    let firstMove = null;
+                    while (parentMap.has(currKey)) {
+                        const step = parentMap.get(currKey);
+                        firstMove = step.dir;
+                        currKey = `${step.from.x},${step.from.y}`;
+                    }
+                    return firstMove;
+                }
+
+                for (let d of directions) {
+                    const nx = current.x + d.x;
+                    const ny = current.y + d.y;
+                    const key = `${nx},${ny}`;
+
+                    if (nx >= 0 && nx < tileCount && ny >= 0 && ny < tileCount) {
+                        if (!bodySet.has(key) && !obstacleSet.has(key) && !visited.has(key)) {
+                            visited.add(key);
+                            parentMap.set(key, { from: current, dir: d.dir });
+                            queue.enqueue({ x: nx, y: ny });
+                        }
+                    }
+                }
+            }
+            return null; 
+        }
+
+
+        function enqueueInput(dir) {
+            if (!aiMode) inputQueue.enqueue(dir);
+        }
+
+        window.addEventListener('keydown', e => {
+            if (e.key === 'ArrowUp' || e.key === 'w') enqueueInput('UP');
+            if (e.key === 'ArrowDown' || e.key === 's') enqueueInput('DOWN');
+            if (e.key === 'ArrowLeft' || e.key === 'a') enqueueInput('LEFT');
+            if (e.key === 'ArrowRight' || e.key === 'd') enqueueInput('RIGHT');
+            if (e.key === 'p') togglePause();
+        });
+
+        function togglePause() {
+            isPaused = !isPaused;
+            document.getElementById('pauseBtn').textContent = isPaused ? 'Resume' : 'Pause';
+        }
+
+        function toggleAI() {
+            aiMode = !aiMode;
+            const btn = document.getElementById('aiBtn');
+            btn.textContent = `AI Auto-Play (BFS): ${aiMode ? 'ON' : 'OFF'}`;
+            btn.classList.toggle('active', aiMode);
+        }
+
+        function update() {
+            if (isPaused) return;
+
+            if (aiMode) {
+                const head = snake.peekFront();
+                const aiNextMove = findShortestPathBFS(head, food);
+                if (aiNextMove) direction = aiNextMove;
+            } else if (!inputQueue.isEmpty()) {
+                const nextDir = inputQueue.dequeue();
+                if (nextDir === 'UP' && direction !== 'DOWN') direction = 'UP';
+                if (nextDir === 'DOWN' && direction !== 'UP') direction = 'DOWN';
+                if (nextDir === 'LEFT' && direction !== 'RIGHT') direction = 'LEFT';
+                if (nextDir === 'RIGHT' && direction !== 'LEFT') direction = 'RIGHT';
+            }
+
+            const head = { ...snake.peekFront() };
+            if (direction === 'UP') head.y -= 1;
+            if (direction === 'DOWN') head.y += 1;
+            if (direction === 'LEFT') head.x -= 1;
+            if (direction === 'RIGHT') head.x += 1;
+
+            const headKey = `${head.x},${head.y}`;
+
+            if (head.x < 0 || head.x >= tileCount || head.y < 0 || head.y >= tileCount) return gameOver();
+
+            if (bodySet.has(headKey)) return gameOver();
+
+            if (obstacleSet.has(headKey)) return gameOver();
+
+            snake.addFront(head);
+            bodySet.add(headKey);
+
+            if (head.x === food.x && head.y === food.y) {
+                score += 10;
+                document.getElementById('score').textContent = score;
+                checkLevelUp();
+                spawnFood();
+            } else {
+                const tail = snake.removeBack();
+                bodySet.delete(`${tail.x},${tail.y}`);
+            }
+
+            draw();
+        }
+
+        function draw() {
+            ctx.fillStyle = '#111';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = '#888';
+            obstacleSet.forEach(key => {
+                const [x, y] = key.split(',').map(Number);
+                ctx.fillRect(x * gridSize, y * gridSize, gridSize - 1, gridSize - 1);
+            });
+
+            snake.toArray().forEach((part, index) => {
+                ctx.fillStyle = index === 0 ? '#66FF66' : '#00FF00';
+                ctx.fillRect(part.x * gridSize, part.y * gridSize, gridSize - 1, gridSize - 1);
+            });
+
+            ctx.fillStyle = '#FF0000';
+            ctx.fillRect(food.x * gridSize, food.y * gridSize, gridSize - 1, gridSize - 1);
+        }
+
+
+        function getLeaderboard() {
+            return JSON.parse(localStorage.getItem('snakeLeaderboard')) || [];
+        }
+
+        function saveScore(newScore) {
+            if (newScore === 0) return;
+            let board = getLeaderboard();
+            board.push({ score: newScore, date: new Date().toLocaleDateString() });
+            board.sort((a, b) => b.score - a.score);
+            board = board.slice(0, 5); // Keep Top 5
+            localStorage.setItem('snakeLeaderboard', JSON.stringify(board));
+        }
+
+        function updateLeaderboardUI() {
+            const board = getLeaderboard();
+            const listEl = document.getElementById('leaderboardList');
+            listEl.innerHTML = '';
+
+            if (board.length === 0) {
+                listEl.innerHTML = '<li>No games played yet</li>';
+            } else {
+                board.forEach(entry => {
+                    const li = document.createElement('li');
+                    li.textContent = `${entry.score} pts (${entry.date})`;
+                    listEl.appendChild(li);
+                });
+            }
+
+            document.getElementById('highScore').textContent = board.length > 0 ? board[0].score : 0;
+        }
+
+        function gameOver() {
+            clearInterval(gameLoop);
+            saveScore(score);
+            alert(`Game Over!\nFinal Score: ${score}\nLevel Reached: ${level}`);
+            initGame();
+        }
+
+        initGame();
+    </script>
+</body>
+</html>
